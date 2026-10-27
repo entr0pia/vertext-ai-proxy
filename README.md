@@ -9,6 +9,7 @@
 ## 核心特性
 
 - **协议原生兼容**：直接对接 Google 官方 `endpoints/openapi`，无需进行复杂的数据结构重写与字段转换。
+- **全能向量生成（Embeddings）**：提供标准 OpenAI `/v1/embeddings` 端点，透明桥接 Google Vertex AI 原生预测能力，原生支持 `text-embedding-004`、`gemini-embedding-001` 和 `text-multilingual-embedding-002`，支持自定义向量维度与批量生成。
 - **自动化 Token 管理**：读取 `service_account.json` 自动解析 `project_id`，在内存中管理并自动异步续签 Google OAuth Bearer Token（有效时长 1 小时，过期前 5 分钟自动刷新）。
 - **零缓冲流式输出**：基于 `httpx` 实现 Server-Sent Events（SSE）无缓冲实时打字机输出，长文本生成更稳定。
 - **安全优先（Secure by Default）**：
@@ -113,7 +114,33 @@ for chunk in response:
     print(content, end="", flush=True)
 ```
 
-### 3. cURL 命令行测试
+### 3. Python OpenAI SDK 生成文本向量 (Embeddings)
+
+```python
+import openai
+
+client = openai.OpenAI(
+    base_url="http://127.0.0.1:8766/v1",
+    api_key="sk-my-secret-token-123456",
+)
+
+# 1. 单文本嵌入
+embedding_res = client.embeddings.create(
+    model="text-embedding-004",
+    input="The quick brown fox jumps over the lazy dog",
+)
+print("Vector dims:", len(embedding_res.data[0].embedding))
+
+# 2. 多文本批量嵌入并自定义维度
+batch_res = client.embeddings.create(
+    model="gemini-embedding-001",
+    input=["First document", "Second document"],
+    dimensions=512,
+)
+print(f"Batch count: {len(batch_res.data)}, Dims: {len(batch_res.data[0].embedding)}")
+```
+
+### 4. cURL 命令行测试
 
 ```bash
 curl http://127.0.0.1:8766/v1/chat/completions \

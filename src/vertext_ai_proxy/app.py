@@ -1,20 +1,24 @@
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 import logging
-from typing import Any
-from fastapi import Depends, FastAPI, Request, Response
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 import httpx
 import uvicorn
 
-from vertext_ai_proxy.auth import GCPTokenManager
-from vertext_ai_proxy.config import AppConfig, load_config, validate_config
-from vertext_ai_proxy.proxy import VertexAIProxy
-from vertext_ai_proxy.security import (
-    APIKeyValidator,
+from vertext_ai_proxy.core.auth import GCPTokenManager
+from vertext_ai_proxy.core.config import AppConfig, load_config, validate_config
+from vertext_ai_proxy.core.exceptions import (
     OpenAIAPIException,
     openai_exception_handler,
 )
+from vertext_ai_proxy.core.security import APIKeyValidator
+from vertext_ai_proxy.proxy import VertexAIProxy
+from vertext_ai_proxy.routers.health import router as health_router
+from vertext_ai_proxy.routers.v1.chat import router as chat_router
+from vertext_ai_proxy.routers.v1.embeddings import router as embeddings_router
+from vertext_ai_proxy.routers.v1.models import router as models_router
 
 logger = logging.getLogger(__name__)
 
@@ -65,15 +69,39 @@ def create_app(
     app = FastAPI(
         title="Vertex AI OpenAI Proxy",
         description="Lightweight reverse proxy translating Google Cloud Vertex AI OpenAPI to OpenAI format",
-        version="0.1.0",
+        version="0.2.0",
         lifespan=lifespan,
     )
 
-    # 将 proxy 实例绑定到 app.state
+    # 注册依赖服务与组件至 app.state
+    app.state.config = active_config
     app.state.proxy = proxy_instance
+    app.state.client = proxy_instance.client
+    app.state.chat_service = proxy_instance.chat_service
+    app.state.embedding_service = proxy_instance.embedding_service
+    app.state.model_service = proxy_instance.model_service
+    app.state.api_key_validator = APIKeyValidator(active_config)
 
     # 注册符合 OpenAI 标准的异常拦截器
     app.add_exception_handler(OpenAIAPIException, openai_exception_handler)
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(
+        request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
+        errors = exc.errors()
+        err_msg = "; ".join([f"{err.get('loc', [])}: {err.get('msg')}" for err in errors])
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": err_msg,
+                    "type": "invalid_request_error",
+                    "param": str(errors[0].get("loc", [None])[-1]) if errors else None,
+                    "code": "invalid_parameter",
+                }
+            },
+        )
 
     @app.exception_handler(Exception)
     async def generic_exception_handler(request: Request, exc: Exception) -> JSONResponse:
@@ -90,36 +118,11 @@ def create_app(
             },
         )
 
-    # 鉴权依赖注入
-    api_key_validator = APIKeyValidator(active_config)
-
-    # 1. 健康检查探针（免鉴权）
-    @app.get("/healthz")
-    async def health_check() -> dict[str, Any]:
-        return {
-            "status": "healthy",
-            "project_id": active_token_manager.project_id,
-            "location": active_token_manager.location,
-        }
-
-    # 2. 模型列表接口（OpenAI 兼容，实时向上游 Vertex AI 请求获取）
-    @app.get("/v1/models")
-    async def list_models(
-        request: Request,
-        _: str = Depends(api_key_validator),
-    ) -> Response:
-        proxy: VertexAIProxy = app.state.proxy
-        return await proxy.forward_models(request)
-
-    # 3. 对话补全反代接口（OpenAI 兼容）
-    @app.post("/v1/chat/completions")
-    async def chat_completions(
-        request: Request,
-        _: str = Depends(api_key_validator),
-    ) -> Response:
-        payload = await request.json()
-        proxy: VertexAIProxy = app.state.proxy
-        return await proxy.forward_chat_completions(request, payload)
+    # 挂载模块化路由
+    app.include_router(health_router)
+    app.include_router(models_router)
+    app.include_router(chat_router)
+    app.include_router(embeddings_router)
 
     return app
 

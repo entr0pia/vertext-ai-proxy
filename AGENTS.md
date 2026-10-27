@@ -13,6 +13,7 @@
 - **Auth Translation**: Intercepts downstream OpenAI client requests authenticated with static API keys (`Authorization: Bearer <key>`) and proxies them to Vertex AI using short-lived Google Cloud OAuth 2.0 Bearer tokens derived from a Google Service Account JSON.
 - **Dynamic Model Garden**: Automatically queries Google Cloud Vertex AI's `v1beta1/publishers/google/models` endpoint to serve `/v1/models` dynamically, with in-memory 1-hour caching and graceful configuration fallback.
 - **SSE Streaming Pass-Through**: Provides real-time, non-buffered Server-Sent Events (SSE) streaming for `/v1/chat/completions` using `httpx.AsyncClient` (`Accept-Encoding: identity` + `aiter_bytes()`).
+- **Embeddings Proxy & Adaptation**: Translates standard OpenAI `POST /v1/embeddings` requests to Google Vertex AI native `:predict` endpoint, supporting `text-embedding-004`, `gemini-embedding-001`, and batching.
 - **Secure by Default**: Binds to `127.0.0.1:8766` by default and enforces startup-time validation to halt execution if placeholder or empty keys are configured.
 
 ### Tech Stack
@@ -44,17 +45,43 @@ Vertext-AI-Proxy/
 ├── src/
 │   └── vertext_ai_proxy/
 │       ├── __init__.py
-│       ├── app.py               # FastAPI application factory, lifespan, routes
-│       ├── auth.py              # GCPTokenManager (loads SA JSON, manages token lifecycle)
-│       ├── config.py            # Pydantic configuration loader & startup validator
+│       ├── main.py              # CLI server startup runner
+│       ├── app.py               # FastAPI application factory, lifespan, global middleware
+│       ├── proxy.py             # Facade wrapper coordinating chat, models, and embeddings
 │       ├── models.py            # Model identifier normalization (auto-prefix 'google/')
-│       ├── proxy.py             # VertexAIProxy (forwards /models and /chat/completions)
-│       └── security.py          # APIKeyValidator (constant-time token check, OpenAI errors)
+│       ├── core/                # Foundational components
+│       │   ├── __init__.py
+│       │   ├── auth.py          # GCPTokenManager (SA credentials & OAuth lifecycle)
+│       │   ├── config.py        # Pydantic configuration loader & startup validator
+│       │   ├── exceptions.py    # OpenAIAPIException and handlers
+│       │   └── security.py      # APIKeyValidator (constant-time token check)
+│       ├── schemas/             # Request/response DTOs
+│       │   ├── __init__.py
+│       │   ├── common.py        # Error & usage schemas
+│       │   ├── chat.py          # Chat completions schemas
+│       │   ├── embeddings.py    # Embeddings request & response schemas
+│       │   └── models.py        # Model listing schemas
+│       ├── services/            # Domain logic and upstream integrations
+│       │   ├── __init__.py
+│       │   ├── vertex_client.py # Low-level Vertex HTTP transport & URL resolution
+│       │   ├── chat_service.py  # Chat completions forwarding & SSE streaming
+│       │   ├── embedding_service.py # Embeddings protocol translation (OpenAI -> :predict)
+│       │   └── model_service.py # Publisher models discovery & 1-hour caching
+│       └── routers/             # FastAPI APIRouter modules
+│           ├── __init__.py
+│           ├── health.py        # GET /healthz
+│           └── v1/
+│               ├── __init__.py
+│               ├── chat.py      # POST /v1/chat/completions
+│               ├── embeddings.py# POST /v1/embeddings
+│               └── models.py    # GET /v1/models
 └── tests/
     ├── test_auth.py             # Unit tests for token manager and expiry logic
     ├── test_config.py           # Unit tests for config loading, priority, and validation
+    ├── test_embeddings.py       # Integration tests for embeddings proxying & validation
     ├── test_models.py           # Unit tests for model normalization
     ├── test_proxy.py            # Integration tests for proxy routing and streaming
+    ├── test_schemas.py          # Unit tests for schema validation
     └── test_security.py         # Unit tests for API key validation and 401 handling
 ```
 
