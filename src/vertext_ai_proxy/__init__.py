@@ -1,2 +1,3 @@
-def main() -> None:
-    print("Hello from vertext-ai-proxy!")
+from vertext_ai_proxy.cli import main
+
+__all__ = ["main"]

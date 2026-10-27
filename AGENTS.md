@@ -45,6 +45,7 @@ Vertext-AI-Proxy/
 ├── src/
 │   └── vertext_ai_proxy/
 │       ├── __init__.py
+│       ├── cli.py               # Standalone CLI interface (vap init, vap run)
 │       ├── main.py              # CLI server startup runner
 │       ├── app.py               # FastAPI application factory, lifespan, global middleware
 │       ├── proxy.py             # Facade wrapper coordinating chat, models, and embeddings
@@ -54,7 +55,8 @@ Vertext-AI-Proxy/
 │       │   ├── auth.py          # GCPTokenManager (SA credentials & OAuth lifecycle)
 │       │   ├── config.py        # Pydantic configuration loader & startup validator
 │       │   ├── exceptions.py    # OpenAIAPIException and handlers
-│       │   └── security.py      # APIKeyValidator (constant-time token check)
+│       │   ├── security.py      # APIKeyValidator (constant-time token check)
+│       │   └── templates.py     # Embedded configuration template for 'vap init'
 │       ├── schemas/             # Request/response DTOs
 │       │   ├── __init__.py
 │       │   ├── common.py        # Error & usage schemas

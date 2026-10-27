@@ -1,12 +1,21 @@
 [project]
 name = "vertext-ai-proxy"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.2.0"
+description = "轻量级 Google Cloud Vertex AI（Gemini Enterprise Agent Platform）OpenAI 协议反向代理网关"
 readme = "README.md"
+license = "MIT"
 authors = [
     { name = "entr0pia", email = "30486766+entr0pia@users.noreply.github.com" },
 ]
 requires-python = ">=3.11"
+keywords = ["vertex-ai", "gemini", "openai", "reverse-proxy", "llm", "embeddings"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
     "fastapi>=0.162.0",
     "google-auth>=2.62.0",
@@ -17,8 +26,14 @@ dependencies = [
     "uvicorn>=0.54.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/entr0pia/vertext-ai-proxy"
+Repository = "https://github.com/entr0pia/vertext-ai-proxy"
+Issues = "https://github.com/entr0pia/vertext-ai-proxy/issues"
+
 [project.scripts]
-vertext-ai-proxy = "vertext_ai_proxy:main"
+vap = "vertext_ai_proxy.cli:main"
+vertext-ai-proxy = "vertext_ai_proxy.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.13.5,<0.14.0"]

@@ -6,24 +6,34 @@
 
 ---
 
-## 核心特性
+## 快速上手
 
-- **协议原生兼容**：直接对接 Google 官方 `endpoints/openapi`，无需进行复杂的数据结构重写与字段转换。
-- **全能向量生成（Embeddings）**：提供标准 OpenAI `/v1/embeddings` 端点，透明桥接 Google Vertex AI 原生预测能力，原生支持 `text-embedding-004`、`gemini-embedding-001` 和 `text-multilingual-embedding-002`，支持自定义向量维度与批量生成。
-- **自动化 Token 管理**：读取 `service_account.json` 自动解析 `project_id`，在内存中管理并自动异步续签 Google OAuth Bearer Token（有效时长 1 小时，过期前 5 分钟自动刷新）。
-- **零缓冲流式输出**：基于 `httpx` 实现 Server-Sent Events（SSE）无缓冲实时打字机输出，长文本生成更稳定。
-- **安全优先（Secure by Default）**：
-  - 默认仅监听本地回环地址（`127.0.0.1:8766`），杜绝局域网或公网非预期暴露。
-  - **启动期强校验**：启动时检测到示例/占位 Key（如 `sk-change-this-...`）或空 Key 时，立即终止运行并报错提示。
-  - `.gitignore` 默认严格忽略 `config.local.yaml` 与 `service_account.json`。
-- **模型名智能兼容**：客户端请求 `gemini-2.5-flash` 时，代理可自动重写为 `google/gemini-2.5-flash`。
-- **多 Key 与网络代理**：支持多客户端 API Key 白名单配置，支持配置本地网络代理端口（`http_proxy`）。
+### 方式 A：通过 uv tool 全局安装（推荐）
+
+本工具支持作为全局命令行工具独立安装与运行：
+
+```powershell
+# 1. 本地安装（或通过 Git 仓库安装）
+uv tool install . --force
+
+# 2. 在任意项目或工作目录下一键生成本地配置
+vap init
+
+# 3. 按提示编辑当前目录下的 config.local.yaml，配置您的自定义 API Key 和 GCP 凭证路径
+# 4. 启动反向代理服务
+vap run
+```
+
+支持的 CLI 参数：
+- `vap init [-f/--force]`：在当前目录创建 `config.local.yaml`（带防误覆盖保护）。
+- `vap run [-c/--config <path>] [-H/--host <host>] [-p/--port <port>]`：启动服务。
+- `vap -v/--version`：查看当前工具版本。
 
 ---
 
-## 快速上手
+### 方式 B：源码直接运行
 
-### 1. 放置 GCP 服务账号密钥
+#### 1. 放置 GCP 服务账号密钥
 
 从 Google Cloud 控制台下载服务账号密钥 JSON，重命名为 `service_account.json` 放置在项目根目录：
 
@@ -80,6 +90,21 @@ INFO:     Vertex AI OpenAI Proxy started on http://127.0.0.1:8766 (GCP Project: 
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://127.0.0.1:8766 (Press CTRL+C to quit)
 ```
+
+---
+
+## 核心特性
+
+- **协议原生兼容**：直接对接 Google 官方 `endpoints/openapi`，无需进行复杂的数据结构重写与字段转换。
+- **全能向量生成（Embeddings）**：提供标准 OpenAI `/v1/embeddings` 端点，透明桥接 Google Vertex AI 原生预测能力，原生支持 `text-embedding-004`、`gemini-embedding-001` 和 `text-multilingual-embedding-002`，支持自定义向量维度与批量生成。
+- **自动化 Token 管理**：读取 `service_account.json` 自动解析 `project_id`，在内存中管理并自动异步续签 Google OAuth Bearer Token（有效时长 1 小时，过期前 5 分钟自动刷新）。
+- **零缓冲流式输出**：基于 `httpx` 实现 Server-Sent Events（SSE）无缓冲实时打字机输出，长文本生成更稳定。
+- **安全优先（Secure by Default）**：
+  - 默认仅监听本地回环地址（`127.0.0.1:8766`），杜绝局域网或公网非预期暴露。
+  - **启动期强校验**：启动时检测到示例/占位 Key（如 `sk-change-this-...`）或空 Key 时，立即终止运行并报错提示。
+  - `.gitignore` 默认严格忽略 `config.local.yaml` 与 `service_account.json`。
+- **模型名智能兼容**：客户端请求 `gemini-2.5-flash` 时，代理可自动重写为 `google/gemini-2.5-flash`。
+- **多 Key 与网络代理**：支持多客户端 API Key 白名单配置，支持配置本地网络代理端口（`http_proxy`）。
 
 ---
 
