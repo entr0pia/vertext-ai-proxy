@@ -1,5 +1,9 @@
 # Vertex AI OpenAI Proxy
 
+[![PyPI version](https://img.shields.io/pypi/v/vertext-ai-proxy.svg)](https://pypi.org/project/vertext-ai-proxy/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://pypi.org/project/vertext-ai-proxy/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](https://opensource.org/licenses/MIT)
+
 轻量级 Google Cloud Vertex AI（Gemini Enterprise Agent Platform）OpenAI 协议反向代理网关。
 
 将 Google Cloud 的服务账号（Service Account）OAuth 2.0 认证转换为通用的 OpenAI API Key 鉴权模式，下游客户端（如 Cursor、NextChat、Cherry Studio、OpenAI SDK 等）只需配置标准的 `Base URL` 和静态 `API Key`，即可无缝调用 Vertex AI 模型。
@@ -8,21 +12,39 @@
 
 ## 快速上手
 
-### 方式 A：通过 uv tool 全局安装（推荐）
+### 方式 A：通过 PyPI 全局安装（推荐）
 
-本工具支持作为全局命令行工具独立安装与运行：
+本工具已正式发布至 PyPI，支持通过 `uv tool`、`uvx` 或 `pip` 全局安装与运行：
 
 ```powershell
-# 1. 本地安装（或通过 Git 仓库安装）
-uv tool install . --force
+# 1. 全局安装 CLI 工具（推荐使用 uv）
+uv tool install vertext-ai-proxy
 
-# 2. 在任意项目或工作目录下一键生成本地配置
+# 或者使用 pip 全局安装：
+# pip install vertext-ai-proxy
+
+# 2. 在任意工作目录下一键初始化配置文件
 vap init
 
-# 3. 按提示编辑当前目录下的 config.local.yaml，配置您的自定义 API Key 和 GCP 凭证路径
+# 3. 按提示编辑当前目录下的 config.local.yaml：
+#    - 设置您的自定义 API Key (例如 sk-my-secret-token)
+#    - 将 GCP 服务账号 service_account.json 放在该目录（或配置绝对路径）
+
 # 4. 启动反向代理服务
 vap run
 ```
+
+> [!TIP]
+> **免安装运行（uvx）**：如果您不想全局安装，也可以通过 `uvx` 直接执行：
+> ```powershell
+> uvx vertext-ai-proxy vap init
+> uvx vertext-ai-proxy vap run
+> ```
+> **版本升级**：
+> ```powershell
+> uv tool upgrade vertext-ai-proxy
+> # 或 pip install --upgrade vertext-ai-proxy
+> ```
 
 支持的 CLI 参数：
 - `vap init [-f/--force]`：在当前目录创建 `config.local.yaml`（带防误覆盖保护）。
@@ -31,7 +53,7 @@ vap run
 
 ---
 
-### 方式 B：源码直接运行
+### 方式 B：源码本地开发运行
 
 #### 1. 放置 GCP 服务账号密钥
 
@@ -177,12 +199,3 @@ curl http://127.0.0.1:8766/v1/chat/completions \
   }'
 ```
 
----
-
-## 自动化测试
-
-运行全部 30 个单元与集成测试：
-
-```powershell
-$env:PYTHONUTF8=1; uv run pytest -v
-```

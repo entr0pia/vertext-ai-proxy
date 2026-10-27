@@ -8,6 +8,7 @@ import httpx
 import uvicorn
 
 from vertext_ai_proxy.core.auth import GCPTokenManager
+from vertext_ai_proxy._version import __version__
 from vertext_ai_proxy.core.config import AppConfig, load_config, validate_config
 from vertext_ai_proxy.core.exceptions import (
     OpenAIAPIException,
@@ -69,7 +70,7 @@ def create_app(
     app = FastAPI(
         title="Vertex AI OpenAI Proxy",
         description="Lightweight reverse proxy translating Google Cloud Vertex AI OpenAPI to OpenAI format",
-        version="0.2.0",
+        version=__version__,
         lifespan=lifespan,
     )
 

@@ -3,11 +3,11 @@ import logging
 from pathlib import Path
 import sys
 
+from vertext_ai_proxy._version import __version__
 from vertext_ai_proxy.app import create_app
 from vertext_ai_proxy.core.config import load_config, validate_config
 from vertext_ai_proxy.core.templates import DEFAULT_CONFIG_TEMPLATE
 
-__version__ = "0.2.0"
 logger = logging.getLogger("vertext_ai_proxy.cli")
 
 

@@ -1,6 +1,6 @@
 [project]
 name = "vertext-ai-proxy"
-version = "0.2.0"
+version = "0.2.1"
 description = "轻量级 Google Cloud Vertex AI（Gemini Enterprise Agent Platform）OpenAI 协议反向代理网关"
 readme = "README.md"
 license = "MIT"
