@@ -30,7 +30,7 @@ class VertexClient:
 
     def get_domain(self, location: str | None = None) -> str:
         loc = location or self.location
-        if loc == "global":
+        if loc in ("global", "us", "eu"):
             return "aiplatform.googleapis.com"
         return f"{loc}-aiplatform.googleapis.com"
 
@@ -50,6 +50,22 @@ class VertexClient:
         return (
             f"https://{domain}/v1/projects/{self.project_id}"
             f"/locations/{loc}/publishers/google/models/{clean_model}:predict"
+        )
+
+    def get_gemini_embed_url(
+        self,
+        model: str,
+        action: str = "embedContent",
+        location: str | None = None,
+    ) -> str:
+        """构建 Gemini 专属嵌入端点 URL（:embedContent 或 :batchEmbedContents）。"""
+        loc = location or self.location
+        domain = self.get_domain(loc)
+        clean_model = model.split("/")[-1]
+        clean_action = action.lstrip(":")
+        return (
+            f"https://{domain}/v1/projects/{self.project_id}"
+            f"/locations/{loc}/publishers/google/models/{clean_model}:{clean_action}"
         )
 
     def get_publisher_models_url(self) -> str:

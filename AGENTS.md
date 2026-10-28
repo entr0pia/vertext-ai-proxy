@@ -163,6 +163,10 @@ $env:PYTHONUTF8=1; uv run pytest tests/test_proxy.py
 - When writing tests for FastAPI endpoints, use `TestClient(app)` for synchronous route assertions, or `httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test")` for async/streaming assertions.
 - Mock upstream Google Cloud HTTP calls using `unittest.mock.AsyncMock` on `httpx.AsyncClient`. Do NOT make unmocked external requests inside `tests/`.
 
+### End-to-End (E2E) Live Testing
+- For real upstream integration testing, launch the proxy server with local credentials (`vap run` or `$env:PYTHONUTF8=1; uv run python -m vertext_ai_proxy.app`) and execute live HTTP requests against `http://127.0.0.1:8766` using a scratch script (`<conversation-id>/scratch/test_e2e.py`).
+- Verify health (`/healthz`), chat completions (`/v1/chat/completions`), and embeddings (`/v1/embeddings`) against actual Vertex AI upstream endpoints.
+
 ---
 
 ## 6. Code Style and Conventions
@@ -185,6 +189,10 @@ $env:PYTHONUTF8=1; uv run pytest tests/test_proxy.py
 This project adheres to the **OpenSpec** specification-driven change management workflow:
 - `openspec/specs/openai-proxy/spec.md`: The single source of truth for the proxy's observable behavior.
 - Before introducing substantial feature changes, use the OpenSpec workflow (`/openspec-explore`, `/openspec-propose`, `/openspec-apply-change`, `/openspec-archive-change`).
+- **Mandatory End-to-End (E2E) Verification**:
+  - After completing tasks in `/openspec-apply-change` and before archiving or committing, ALWAYS execute an end-to-end integration test against the running proxy server (`http://127.0.0.1:8766` with local `config.local.yaml`) to verify real upstream Vertex AI connectivity and protocol behavior without mocks.
+- **Archive Naming Convention**:
+  - When archiving changes into `openspec/changes/archive/`, the archive directory name MUST include a two-digit incremental sequence number between the date and the change name: `YYYY-MM-DD-NN-<change-name>` (e.g., `2026-10-28-01-support-gemini-embedding-2`).
 - Verify specification compliance with:
   ```powershell
   openspec validate --specs

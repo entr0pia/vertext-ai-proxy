@@ -118,7 +118,7 @@ INFO:     Uvicorn running on http://127.0.0.1:8766 (Press CTRL+C to quit)
 ## 核心特性
 
 - **协议原生兼容**：直接对接 Google 官方 `endpoints/openapi`，无需进行复杂的数据结构重写与字段转换。
-- **全能向量生成（Embeddings）**：提供标准 OpenAI `/v1/embeddings` 端点，透明桥接 Google Vertex AI 原生预测能力，原生支持 `text-embedding-004`、`gemini-embedding-001` 和 `text-multilingual-embedding-002`，支持自定义向量维度与批量生成。
+- **全能向量生成（Embeddings）**：提供标准 OpenAI `/v1/embeddings` 端点，透明路由桥接 Google Vertex AI 原生能力，原生支持最新多模态模型 `gemini-embedding-2`（自动适配 `:embedContent`/`:batchEmbedContents`）、`text-embedding-004`、`gemini-embedding-001` 和 `text-multilingual-embedding-002`，支持自定义向量维度与批量生成。
 - **自动化 Token 管理**：读取 `service_account.json` 自动解析 `project_id`，在内存中管理并自动异步续签 Google OAuth Bearer Token（有效时长 1 小时，过期前 5 分钟自动刷新）。
 - **零缓冲流式输出**：基于 `httpx` 实现 Server-Sent Events（SSE）无缓冲实时打字机输出，长文本生成更稳定。
 - **安全优先（Secure by Default）**：
@@ -185,6 +185,14 @@ batch_res = client.embeddings.create(
     dimensions=512,
 )
 print(f"Batch count: {len(batch_res.data)}, Dims: {len(batch_res.data[0].embedding)}")
+
+# 3. 使用最新 gemini-embedding-2 多模态嵌入模型
+gemini2_res = client.embeddings.create(
+    model="gemini-embedding-2",
+    input=["Multimodal query document 1", "Multimodal query document 2"],
+    dimensions=768,
+)
+print(f"Gemini-Embedding-2 dims: {len(gemini2_res.data[0].embedding)}")
 ```
 
 ### 4. cURL 命令行测试
@@ -197,5 +205,15 @@ curl http://127.0.0.1:8766/v1/chat/completions \
     "model": "gemini-2.5-flash",
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
+```
+
+---
+
+## 自动化测试
+
+运行全部 50 个单元与集成测试：
+
+```powershell
+$env:PYTHONUTF8=1; uv run pytest -v
 ```
 
