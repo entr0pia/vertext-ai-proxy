@@ -108,7 +108,7 @@ $env:PYTHONUTF8=1; uv run python -m vertext_ai_proxy.app
 ```text
 INFO:     Started server process
 INFO:     Waiting for application startup.
-INFO:     Vertex AI OpenAI Proxy started on http://127.0.0.1:8766 (GCP Project: your-project-id, Location: global)
+INFO:     Vertex AI OpenAI Proxy started
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://127.0.0.1:8766 (Press CTRL+C to quit)
 ```
