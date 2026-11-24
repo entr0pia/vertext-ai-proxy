@@ -97,3 +97,63 @@ def test_retrieve_model_requires_auth():
     resp = client.get("/v1/models/gemini-3.8-flash")
     assert resp.status_code == 401
     assert resp.json()["error"]["code"] == "invalid_api_key"
+
+
+def test_list_models_respects_regional_location_and_paginates():
+    config = AppConfig(
+        proxy=ProxyConfig(
+            api_keys=["sk-test-models-key"],
+            models=[],
+        ),
+        gcp=GCPConfig(project_id="test-proj", location="us-central1"),
+    )
+    mock_token_manager = MagicMock()
+    mock_token_manager.project_id = "test-proj"
+    mock_token_manager.location = "us-central1"
+    mock_token_manager.get_access_token = AsyncMock(return_value="mock-gcp-token")
+
+    mock_http_client = MagicMock(spec=httpx.AsyncClient)
+    mock_http_client.get = AsyncMock(
+        side_effect=[
+            httpx.Response(
+                200,
+                json={
+                    "publisherModels": [
+                        {"name": "publishers/google/models/gemini-3.8-flash"},
+                    ],
+                    "nextPageToken": "page-2-token",
+                },
+            ),
+            httpx.Response(
+                200,
+                json={
+                    "publisherModels": [
+                        {"name": "publishers/google/models/gemini-embedding-001"},
+                    ],
+                },
+            ),
+        ]
+    )
+    mock_http_client.aclose = AsyncMock()
+
+    app = create_app(
+        config=config,
+        token_manager=mock_token_manager,
+        http_client=mock_http_client,
+    )
+    client = TestClient(app)
+    resp = client.get("/v1/models", headers={"Authorization": "Bearer sk-test-models-key"})
+    assert resp.status_code == 200
+    ids = {item["id"] for item in resp.json()["data"]}
+    assert "gemini-3.8-flash" in ids
+    assert "google/gemini-3.8-flash" in ids
+    assert "gemini-embedding-001" in ids
+    assert "google/gemini-embedding-001" in ids
+
+    assert mock_http_client.get.call_count == 2
+    first_call = mock_http_client.get.call_args_list[0]
+    second_call = mock_http_client.get.call_args_list[1]
+    assert first_call.args[0] == "https://us-central1-aiplatform.googleapis.com/v1beta1/publishers/google/models"
+    assert first_call.kwargs["params"] == {"pageSize": "100"}
+    assert second_call.args[0] == "https://us-central1-aiplatform.googleapis.com/v1beta1/publishers/google/models"
+    assert second_call.kwargs["params"] == {"pageSize": "100", "pageToken": "page-2-token"}

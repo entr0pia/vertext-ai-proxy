@@ -34,6 +34,21 @@ def test_get_generate_content_url_regional_override():
     )
 
 
+def test_get_publisher_models_url_respects_location():
+    global_client = _make_client(location="global", project_id="demo-proj")
+    assert global_client.get_publisher_models_url() == (
+        "https://aiplatform.googleapis.com/v1beta1/publishers/google/models"
+    )
+    assert global_client.get_publisher_models_url(location="us-central1") == (
+        "https://us-central1-aiplatform.googleapis.com/v1beta1/publishers/google/models"
+    )
+
+    regional_client = _make_client(location="us-central1", project_id="demo-proj")
+    assert regional_client.get_publisher_models_url() == (
+        "https://us-central1-aiplatform.googleapis.com/v1beta1/publishers/google/models"
+    )
+
+
 def test_extract_upstream_error_message_dict_list_and_plain():
     resp_dict = httpx.Response(
         400,

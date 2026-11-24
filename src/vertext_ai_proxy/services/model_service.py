@@ -34,19 +34,46 @@ class ModelService:
                 "Accept": "application/json",
             }
             logger.debug(f"Fetching dynamic publisher models from: {publisher_url}")
-            resp = await self.client.http_client.get(
-                publisher_url,
-                headers=headers,
-                timeout=self.client.config.gcp.timeout_seconds,
-            )
+            publisher_models: list[dict[str, Any]] = []
+            page_token: str | None = None
+            max_pages = 20
+            fetched_ok = False
 
-            if resp.status_code == 200:
+            for page_idx in range(max_pages):
+                params: dict[str, str] = {"pageSize": "100"}
+                if page_token:
+                    params["pageToken"] = page_token
+                resp = await self.client.http_client.get(
+                    publisher_url,
+                    headers=headers,
+                    params=params,
+                    timeout=self.client.config.gcp.timeout_seconds,
+                )
+
+                if resp.status_code != 200:
+                    if page_idx == 0:
+                        logger.warning(
+                            f"Upstream publisher models returned status {resp.status_code}, falling back to config models."
+                        )
+                    else:
+                        logger.warning(
+                            f"Upstream publisher models page {page_idx + 1} returned status {resp.status_code}, stopping pagination."
+                        )
+                    break
+
+                fetched_ok = True
                 raw_json = resp.json()
+                publisher_models.extend(raw_json.get("publisherModels", []))
+                page_token = raw_json.get("nextPageToken")
+                if not page_token:
+                    break
+
+            if fetched_ok:
                 models_data = []
                 created_ts = int(now)
                 seen_ids: set[str] = set()
 
-                for item in raw_json.get("publisherModels", []):
+                for item in publisher_models:
                     full_name = item.get("name", "")
                     if not full_name:
                         continue
@@ -101,10 +128,6 @@ class ModelService:
                 self._cached_models_response = result
                 self._models_cache_expiry = now + 3600  # 缓存 1 小时
                 return JSONResponse(status_code=200, content=result)
-            else:
-                logger.warning(
-                    f"Upstream publisher models returned status {resp.status_code}, falling back to config models."
-                )
         except Exception as e:
             logger.warning(
                 f"Failed to fetch dynamic publisher models: {e}, falling back to config models."

@@ -1,6 +1,8 @@
+import asyncio
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 import logging
+import time
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -27,10 +29,23 @@ from vertext_ai_proxy.routers.v1.responses import router as responses_router
 logger = logging.getLogger(__name__)
 
 
+def _configure_logging(log_level: str) -> None:
+    """配置 vertext_ai_proxy 命名空间日志，确保启动信息与版本号正常输出到控制台。"""
+    pkg_logger = logging.getLogger("vertext_ai_proxy")
+    level = getattr(logging, log_level.upper(), logging.INFO)
+    pkg_logger.setLevel(level)
+    if not pkg_logger.handlers and not logging.getLogger().handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter(
+            "%(levelname)s:     %(message)s"))
+        pkg_logger.addHandler(handler)
+
+
 def create_app(
     config: AppConfig | None = None,
     token_manager: GCPTokenManager | None = None,
     http_client: httpx.AsyncClient | None = None,
+    warmup: bool | None = None,
 ) -> FastAPI:
     """FastAPI 应用工厂函数，支持依赖注入以便利单元测试。"""
     active_config = config or load_config()
@@ -48,8 +63,16 @@ def create_app(
         effective_http_client = httpx.AsyncClient(
             proxy=proxy_url if proxy_url else None,
             follow_redirects=True,
+            limits=httpx.Limits(
+                max_connections=100,
+                max_keepalive_connections=20,
+                keepalive_expiry=60.0,
+            ),
         )
         created_client = True
+
+    should_warmup = warmup if warmup is not None else (
+        created_client and token_manager is None)
 
     proxy_instance = VertexAIProxy(
         config=active_config,
@@ -59,13 +82,38 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+        _configure_logging(active_config.server.log_level)
         logger.info(
-            f"Vertex AI OpenAI Proxy started on http://{active_config.server.host}:{active_config.server.port} "
-            f"(GCP Project: {active_token_manager.project_id}, Location: {active_token_manager.location})"
+            f"Vertex AI OpenAI Proxy v{__version__} started"
         )
+
+        warmup_task: asyncio.Task[None] | None = None
+
+        async def _run_warmup() -> None:
+            started_at = time.perf_counter()
+            try:
+                await active_token_manager.get_access_token()
+                await proxy_instance.model_service.get_models()
+                elapsed = time.perf_counter() - started_at
+                logger.info(
+                    f"Warmup completed in {elapsed:.2f}s "
+                    f"(GCP OAuth token & model catalog ready)"
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning(f"Startup warmup failed (non-fatal): {exc}")
+
+        if should_warmup:
+            warmup_task = asyncio.create_task(_run_warmup())
+
         try:
             yield
         finally:
+            if warmup_task and not warmup_task.done():
+                warmup_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await warmup_task
             if created_client and effective_http_client:
                 await effective_http_client.aclose()
                 logger.info("HTTP client closed.")

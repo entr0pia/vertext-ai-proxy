@@ -88,8 +88,9 @@ class VertexClient:
             f"/locations/{loc}/publishers/google/models/{clean_model}:generateContent"
         )
 
-    def get_publisher_models_url(self) -> str:
-        return "https://aiplatform.googleapis.com/v1beta1/publishers/google/models"
+    def get_publisher_models_url(self, location: str | None = None) -> str:
+        domain = self.get_domain(location)
+        return f"https://{domain}/v1beta1/publishers/google/models"
 
     @staticmethod
     def extract_upstream_error_message(resp: httpx.Response) -> str:

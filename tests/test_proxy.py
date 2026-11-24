@@ -182,3 +182,46 @@ async def test_chat_completions_streaming():
         body = await res.aread()
         assert b"chunk1" in body
         assert b"[DONE]" in body
+
+
+def test_startup_logs_version_and_runs_warmup(caplog):
+    from vertext_ai_proxy._version import __version__
+
+    config = AppConfig(
+        server=ServerConfig(port=8766),
+        proxy=ProxyConfig(api_keys=["sk-test-warmup-key"]),
+        gcp=GCPConfig(location="global"),
+    )
+    mock_tm = MagicMock()
+    mock_tm.project_id = "warmup-proj"
+    mock_tm.location = "global"
+    mock_tm.get_access_token = AsyncMock(return_value="warm-token")
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.get.return_value = httpx.Response(
+        status_code=200,
+        json={"publisherModels": [{"name": "publishers/google/models/gemini-3.8-flash"}]},
+    )
+
+    app = create_app(
+        config=config,
+        token_manager=mock_tm,
+        http_client=mock_client,
+        warmup=True,
+    )
+    with caplog.at_level("INFO", logger="vertext_ai_proxy"):
+        with TestClient(app) as client:
+            # 触发一次健康检查确保事件循环推进完成后台预热
+            res = client.get("/healthz")
+            assert res.status_code == 200
+            # 预热后 /v1/models 应命中缓存，不会再次触发上游 GET
+            models_res = client.get(
+                "/v1/models",
+                headers={"Authorization": "Bearer sk-test-warmup-key"},
+            )
+            assert models_res.status_code == 200
+
+    assert f"v{__version__}" in caplog.text
+    assert "Warmup completed" in caplog.text
+    assert mock_tm.get_access_token.await_count >= 1
+    assert mock_client.get.await_count == 1
