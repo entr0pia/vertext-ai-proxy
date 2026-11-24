@@ -117,15 +117,18 @@ INFO:     Uvicorn running on http://127.0.0.1:8766 (Press CTRL+C to quit)
 
 ## 核心特性
 
-- **协议原生兼容**：直接对接 Google 官方 `endpoints/openapi`，无需进行复杂的数据结构重写与字段转换。
-- **全能向量生成（Embeddings）**：提供标准 OpenAI `/v1/embeddings` 端点，透明路由桥接 Google Vertex AI 原生能力，原生支持最新多模态模型 `gemini-embedding-2`（自动适配 `:embedContent`/`:batchEmbedContents`）、`text-embedding-004`、`gemini-embedding-001` 和 `text-multilingual-embedding-002`，支持自定义向量维度与批量生成。
+- **协议原生兼容**：`/v1/chat/completions` 直接对接 Google 官方 `endpoints/openapi`，支持流式、函数调用、结构化输出与多模态输入。
+- **OpenAI Responses API (`/v1/responses`)**：支持非流式与 SSE 语义事件流、工具调用、推理参数与结构化输出；内置有界 LRU+TTL 轻量内存态存储，支持 `previous_response_id` 多轮续接、`store: false`、`GET`/`DELETE` 与 `POST .../cancel`（零数据库依赖，重启清空）。
+- **图像生成与编辑 (`/v1/images/generations` & `/v1/images/edits`)**：按显式 Google 模型名自动路由——`imagen-*` 路由至 Vertex AI `:predict`（支持 `mask` 局部重绘），`gemini-*` 图像模型路由至 `:generateContent`，不做格式拦截，以模型实际返回为准。
+- **语音合成与转写翻译 (`/v1/audio/speech`、`/v1/audio/transcriptions`、`/v1/audio/translations`)**：基于 Gemini 多模态与原生 TTS 能力，无外部 `ffmpeg` 依赖，不做 `response_format` 拦截（以模型返回为准，显式传 `wav`/`pcm` 时支持标准库 `wave` 无损封装/解包）。
+- **单模型查询与动态模型目录 (`/v1/models` & `/v1/models/{model}`)**：动态拉取 Vertex AI Publisher 模型列表并缓存 1 小时，支持按无前缀或 `google/` 前缀查询单个模型详情。
+- **全能向量生成（Embeddings）**：提供标准 OpenAI `/v1/embeddings` 端点，透明路由桥接 Google Vertex AI 原生能力，支持 `gemini-embedding-2`、`text-embedding-004`、`gemini-embedding-001` 等模型。
 - **自动化 Token 管理**：读取 `service_account.json` 自动解析 `project_id`，在内存中管理并自动异步续签 Google OAuth Bearer Token（有效时长 1 小时，过期前 5 分钟自动刷新）。
 - **零缓冲流式输出**：基于 `httpx` 实现 Server-Sent Events（SSE）无缓冲实时打字机输出，长文本生成更稳定。
 - **安全优先（Secure by Default）**：
   - 默认仅监听本地回环地址（`127.0.0.1:8766`），杜绝局域网或公网非预期暴露。
   - **启动期强校验**：启动时检测到示例/占位 Key（如 `sk-change-this-...`）或空 Key 时，立即终止运行并报错提示。
   - `.gitignore` 默认严格忽略 `config.local.yaml` 与 `service_account.json`。
-- **模型名智能兼容**：客户端请求 `gemini-2.5-flash` 时，代理可自动重写为 `google/gemini-2.5-flash`。
 - **多 Key 与网络代理**：支持多客户端 API Key 白名单配置，支持配置本地网络代理端口（`http_proxy`）。
 
 ---
@@ -195,14 +198,63 @@ gemini2_res = client.embeddings.create(
 print(f"Gemini-Embedding-2 dims: {len(gemini2_res.data[0].embedding)}")
 ```
 
-### 4. cURL 命令行测试
+### 4. Python OpenAI SDK 调用 Responses / Images / Audio
+
+> 注意：所有扩展端点均要求显式传入 Google 模型名（不做 `whisper-1`/`tts-1`/`dall-e-3` 别名映射）。
+
+```python
+import base64
+import openai
+
+client = openai.OpenAI(
+    base_url="http://127.0.0.1:8766/v1",
+    api_key="sk-my-secret-token-123456",
+)
+
+# 1. Responses API（支持 previous_response_id 内存多轮续接与流式 SSE）
+r1 = client.responses.create(model="gemini-3.8-flash", input="记住我的代号是 Nova。")
+r2 = client.responses.create(
+    model="gemini-3.8-flash",
+    previous_response_id=r1.id,
+    input="我的代号是什么？",
+)
+print(r2.output_text)
+
+# 2. 图像生成（imagen-* 走 :predict，gemini-* 图像模型走 :generateContent）
+img = client.images.generate(
+    model="gemini-nano-banana-2.1",
+    prompt="A minimal flat icon of a cloud gateway",
+    size="1024x1024",
+)
+with open("out.png", "wb") as f:
+    f.write(base64.b64decode(img.data[0].b64_json))
+
+# 3. 语音合成 TTS（以模型实际返回为准，显式传 wav/pcm 支持标准库无损转换）
+speech = client.audio.speech.create(
+    model="gemini-3.8-flash-tts",
+    voice="Kore",
+    input="你好，欢迎使用 Vertex AI Proxy。",
+    response_format="wav",
+)
+speech.write_to_file("hello.wav")
+
+# 4. 音频转写 STT & 翻译为英文
+with open("hello.wav", "rb") as audio_file:
+    transcript = client.audio.transcriptions.create(
+        model="gemini-3.8-flash",
+        file=audio_file,
+    )
+    print("Transcription:", transcript.text)
+```
+
+### 5. cURL 命令行测试
 
 ```bash
 curl http://127.0.0.1:8766/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-my-secret-token-123456" \
   -d '{
-    "model": "gemini-2.5-flash",
+    "model": "gemini-3.8-flash",
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```
@@ -211,7 +263,7 @@ curl http://127.0.0.1:8766/v1/chat/completions \
 
 ## 自动化测试
 
-运行全部 50 个单元与集成测试：
+运行全部单元与集成测试：
 
 ```powershell
 $env:PYTHONUTF8=1; uv run pytest -v

@@ -68,8 +68,44 @@ class VertexClient:
             f"/locations/{loc}/publishers/google/models/{clean_model}:{clean_action}"
         )
 
+    def get_generate_content_url(
+        self,
+        model: str,
+        stream: bool = False,
+        location: str | None = None,
+    ) -> str:
+        """构建 Vertex AI 原生 Gemini 生成端点 URL（:generateContent 或 :streamGenerateContent?alt=sse）。"""
+        loc = location or self.location
+        domain = self.get_domain(loc)
+        clean_model = model.split("/")[-1]
+        if stream:
+            return (
+                f"https://{domain}/v1/projects/{self.project_id}"
+                f"/locations/{loc}/publishers/google/models/{clean_model}:streamGenerateContent?alt=sse"
+            )
+        return (
+            f"https://{domain}/v1/projects/{self.project_id}"
+            f"/locations/{loc}/publishers/google/models/{clean_model}:generateContent"
+        )
+
     def get_publisher_models_url(self) -> str:
         return "https://aiplatform.googleapis.com/v1beta1/publishers/google/models"
+
+    @staticmethod
+    def extract_upstream_error_message(resp: httpx.Response) -> str:
+        """从上游 Vertex AI 响应中提取可读错误消息。"""
+        err_msg = resp.text
+        try:
+            err_json = resp.json()
+            if isinstance(err_json, dict) and isinstance(err_json.get("error"), dict):
+                err_msg = err_json["error"].get("message", err_msg)
+            elif isinstance(err_json, list) and err_json:
+                first = err_json[0]
+                if isinstance(first, dict) and isinstance(first.get("error"), dict):
+                    err_msg = first["error"].get("message", err_msg)
+        except Exception:
+            pass
+        return err_msg
 
     async def get_auth_headers(self, extra: dict[str, str] | None = None) -> dict[str, str]:
         access_token = await self.token_manager.get_access_token()

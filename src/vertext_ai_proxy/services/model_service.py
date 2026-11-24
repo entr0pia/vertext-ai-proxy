@@ -2,6 +2,7 @@ import logging
 import time
 from typing import Any
 from fastapi.responses import JSONResponse
+from vertext_ai_proxy.core.exceptions import OpenAIAPIException
 from vertext_ai_proxy.services.vertex_client import VertexClient
 
 logger = logging.getLogger(__name__)
@@ -125,4 +126,49 @@ class ModelService:
         return JSONResponse(
             status_code=200,
             content={"object": "list", "data": fallback_data},
+        )
+
+    async def get_model(self, model_id: str) -> JSONResponse:
+        """按模型 ID 查询单个模型详情，支持无前缀与 google/ 前缀两种形式。"""
+        target = model_id.strip()
+        if not target:
+            raise OpenAIAPIException(
+                status_code=404,
+                message="The model '' does not exist",
+                code="model_not_found",
+                param="model",
+                err_type="invalid_request_error",
+            )
+
+        models_resp = await self.get_models()
+        # 从缓存或最新拉取的列表中检索
+        if self._cached_models_response:
+            models_data = self._cached_models_response.get("data", [])
+        else:
+            import json
+            payload = json.loads(models_resp.body.decode("utf-8"))
+            models_data = payload.get("data", [])
+
+        # 1. 优先精确匹配
+        for item in models_data:
+            if item.get("id") == target:
+                return JSONResponse(status_code=200, content=item)
+
+        # 2. 次选规范化前缀/去前缀匹配
+        alt_candidates: set[str] = set()
+        if "/" in target:
+            alt_candidates.add(target.split("/")[-1])
+        else:
+            alt_candidates.add(f"google/{target}")
+
+        for item in models_data:
+            if item.get("id") in alt_candidates or item.get("root") in alt_candidates:
+                return JSONResponse(status_code=200, content=item)
+
+        raise OpenAIAPIException(
+            status_code=404,
+            message=f"The model '{target}' does not exist",
+            code="model_not_found",
+            param="model",
+            err_type="invalid_request_error",
         )

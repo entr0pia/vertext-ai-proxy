@@ -17,9 +17,12 @@ from vertext_ai_proxy.core.exceptions import (
 from vertext_ai_proxy.core.security import APIKeyValidator
 from vertext_ai_proxy.proxy import VertexAIProxy
 from vertext_ai_proxy.routers.health import router as health_router
+from vertext_ai_proxy.routers.v1.audio import router as audio_router
 from vertext_ai_proxy.routers.v1.chat import router as chat_router
 from vertext_ai_proxy.routers.v1.embeddings import router as embeddings_router
+from vertext_ai_proxy.routers.v1.images import router as images_router
 from vertext_ai_proxy.routers.v1.models import router as models_router
+from vertext_ai_proxy.routers.v1.responses import router as responses_router
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +84,9 @@ def create_app(
     app.state.chat_service = proxy_instance.chat_service
     app.state.embedding_service = proxy_instance.embedding_service
     app.state.model_service = proxy_instance.model_service
+    app.state.response_service = proxy_instance.response_service
+    app.state.image_service = proxy_instance.image_service
+    app.state.audio_service = proxy_instance.audio_service
     app.state.api_key_validator = APIKeyValidator(active_config)
 
     # 注册符合 OpenAI 标准的异常拦截器
@@ -124,6 +130,9 @@ def create_app(
     app.include_router(models_router)
     app.include_router(chat_router)
     app.include_router(embeddings_router)
+    app.include_router(responses_router)
+    app.include_router(images_router)
+    app.include_router(audio_router)
 
     return app
 

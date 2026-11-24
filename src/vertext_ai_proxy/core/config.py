@@ -37,6 +37,9 @@ class ProxyConfig(BaseModel):
     http_proxy: str | None = None
     # 可在 yaml 配置文件中自由增减模型，供 /v1/models 接口返回给客户端
     models: list[str] = Field(default_factory=lambda: list(DEFAULT_MODELS))
+    # /v1/responses 轻量内存态缓存上限与过期时间（秒）
+    response_store_max_items: int = Field(default=500, ge=1)
+    response_store_ttl_seconds: int = Field(default=3600, ge=1)
 
 
 class GCPConfig(BaseModel):

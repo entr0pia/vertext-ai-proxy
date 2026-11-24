@@ -22,3 +22,13 @@ async def list_models(
 ) -> Response:
     model_service = request.app.state.model_service
     return await model_service.get_models()
+
+
+@router.get("/models/{model:path}")
+async def retrieve_model(
+    model: str,
+    request: Request,
+    _: str = Depends(verify_auth),
+) -> Response:
+    model_service = request.app.state.model_service
+    return await model_service.get_model(model)

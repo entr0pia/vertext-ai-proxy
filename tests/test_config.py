@@ -18,6 +18,24 @@ def test_default_config_values():
     assert config.gcp.service_account_file == "service_account.json"
     assert config.gcp.location == "global"
     assert config.proxy.auto_prefix_model is True
+    assert config.proxy.response_store_max_items == 500
+    assert config.proxy.response_store_ttl_seconds == 3600
+
+
+def test_load_config_response_store_overrides(tmp_path: Path):
+    yaml_content = """
+proxy:
+  api_keys:
+    - "sk-custom-store-test"
+  response_store_max_items: 100
+  response_store_ttl_seconds: 600
+"""
+    config_file = tmp_path / "store.yaml"
+    config_file.write_text(yaml_content, encoding="utf-8")
+
+    loaded = load_config(config_file)
+    assert loaded.proxy.response_store_max_items == 100
+    assert loaded.proxy.response_store_ttl_seconds == 600
 
 
 def test_validate_config_rejects_empty_keys():

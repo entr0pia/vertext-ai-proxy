@@ -25,6 +25,10 @@ proxy:
   # 可选：连接 Google 时的本地出口代理（如本地 Clash 代理），留空则直连
   # http_proxy: "http://127.0.0.1:7890"
 
+  # 可选：/v1/responses 内存会话状态缓存上限与过期时间（秒）
+  # response_store_max_items: 500
+  # response_store_ttl_seconds: 3600
+
 gcp:
   # 服务账号凭据 JSON 文件路径（放置在当前目录即可）
   service_account_file: "service_account.json"

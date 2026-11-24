@@ -11,9 +11,12 @@
 
 ### Core Functionality
 - **Auth Translation**: Intercepts downstream OpenAI client requests authenticated with static API keys (`Authorization: Bearer <key>`) and proxies them to Vertex AI using short-lived Google Cloud OAuth 2.0 Bearer tokens derived from a Google Service Account JSON.
-- **Dynamic Model Garden**: Automatically queries Google Cloud Vertex AI's `v1beta1/publishers/google/models` endpoint to serve `/v1/models` dynamically, with in-memory 1-hour caching and graceful configuration fallback.
+- **Dynamic Model Garden & Single-Model Retrieval**: Automatically queries Google Cloud Vertex AI's `v1beta1/publishers/google/models` endpoint to serve `GET /v1/models` and `GET /v1/models/{model:path}` dynamically, with in-memory 1-hour caching and graceful configuration fallback.
 - **SSE Streaming Pass-Through**: Provides real-time, non-buffered Server-Sent Events (SSE) streaming for `/v1/chat/completions` using `httpx.AsyncClient` (`Accept-Encoding: identity` + `aiter_bytes()`).
-- **Embeddings Proxy & Adaptation**: Translates standard OpenAI `POST /v1/embeddings` requests to Google Vertex AI native `:predict` endpoint, supporting `text-embedding-004`, `gemini-embedding-001`, and batching.
+- **Responses API with Bounded In-Memory State**: Translates `POST /v1/responses` (non-streaming and SSE semantic events, tools, reasoning, structured output) to Vertex AI `:generateContent` / `:streamGenerateContent?alt=sse`, backed by an LRU+TTL in-memory store supporting `previous_response_id`, `GET`/`DELETE /v1/responses/{response_id}`, and `POST /v1/responses/{response_id}/cancel`.
+- **Images Generation & Editing**: Translates `POST /v1/images/generations` and `POST /v1/images/edits` (multipart) to Vertex AI Imagen (`:predict`) or Gemini image models (`:generateContent`), without format blocking or OpenAI model alias rewriting.
+- **Audio Speech & Transcription/Translation**: Translates `POST /v1/audio/speech` (TTS, upstream-driven audio passthrough with stdlib `wave` WAV/PCM conversion, no `ffmpeg`), `POST /v1/audio/transcriptions`, and `POST /v1/audio/translations` to Vertex AI Gemini `:generateContent`.
+- **Embeddings Proxy & Adaptation**: Translates standard OpenAI `POST /v1/embeddings` requests to Google Vertex AI native `:predict` or `:embedContent` endpoint, supporting `text-embedding-004`, `gemini-embedding-001`, `gemini-embedding-2`, and batching.
 - **Secure by Default**: Binds to `127.0.0.1:8766` by default and enforces startup-time validation to halt execution if placeholder or empty keys are configured.
 
 ### Tech Stack
@@ -59,32 +62,46 @@ Vertext-AI-Proxy/
 │       │   └── templates.py     # Embedded configuration template for 'vap init'
 │       ├── schemas/             # Request/response DTOs
 │       │   ├── __init__.py
+│       │   ├── audio.py         # Audio TTS/STT schemas
 │       │   ├── common.py        # Error & usage schemas
 │       │   ├── chat.py          # Chat completions schemas
 │       │   ├── embeddings.py    # Embeddings request & response schemas
-│       │   └── models.py        # Model listing schemas
+│       │   ├── images.py        # Image generation & response schemas
+│       │   ├── models.py        # Model listing schemas
+│       │   └── responses.py     # Responses API request/delete schemas
 │       ├── services/            # Domain logic and upstream integrations
 │       │   ├── __init__.py
 │       │   ├── vertex_client.py # Low-level Vertex HTTP transport & URL resolution
+│       │   ├── audio_service.py # Gemini TTS & STT/translation adaptation
 │       │   ├── chat_service.py  # Chat completions forwarding & SSE streaming
-│       │   ├── embedding_service.py # Embeddings protocol translation (OpenAI -> :predict)
-│       │   └── model_service.py # Publisher models discovery & 1-hour caching
+│       │   ├── embedding_service.py # Embeddings protocol translation (OpenAI -> :predict/:embedContent)
+│       │   ├── image_service.py # Imagen (:predict) & Gemini (:generateContent) image routing
+│       │   ├── model_service.py # Publisher models discovery, single lookup & 1-hour caching
+│       │   ├── response_store.py # Bounded LRU+TTL in-memory Responses store & cancel handles
+│       │   └── response_service.py # Responses API translation & SSE semantic streaming
 │       └── routers/             # FastAPI APIRouter modules
 │           ├── __init__.py
 │           ├── health.py        # GET /healthz
 │           └── v1/
 │               ├── __init__.py
+│               ├── audio.py     # POST /v1/audio/{speech,transcriptions,translations}
 │               ├── chat.py      # POST /v1/chat/completions
 │               ├── embeddings.py# POST /v1/embeddings
-│               └── models.py    # GET /v1/models
+│               ├── images.py    # POST /v1/images/{generations,edits}
+│               ├── models.py    # GET /v1/models & GET /v1/models/{model:path}
+│               └── responses.py # POST/GET/DELETE /v1/responses & cancel
 └── tests/
+    ├── test_audio.py            # Integration tests for Audio TTS/STT/translation
     ├── test_auth.py             # Unit tests for token manager and expiry logic
     ├── test_config.py           # Unit tests for config loading, priority, and validation
     ├── test_embeddings.py       # Integration tests for embeddings proxying & validation
-    ├── test_models.py           # Unit tests for model normalization
+    ├── test_images.py           # Integration tests for Imagen & Gemini image routes
+    ├── test_models.py           # Unit & route tests for model normalization and lookup
     ├── test_proxy.py            # Integration tests for proxy routing and streaming
+    ├── test_responses.py        # Unit & integration tests for Responses API & memory store
     ├── test_schemas.py          # Unit tests for schema validation
-    └── test_security.py         # Unit tests for API key validation and 401 handling
+    ├── test_security.py         # Unit tests for API key validation and 401 handling
+    └── test_vertex_client.py    # Unit tests for VertexClient URL builders & error parsing
 ```
 
 ---
