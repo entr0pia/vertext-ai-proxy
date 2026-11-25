@@ -24,7 +24,13 @@ proxy:
   # 可选：连接 Google 时的本地出口代理（如本地 Clash 代理），留空则直连
   # http_proxy: "http://127.0.0.1:7890"
 
-  # 可选：/v1/responses 内存会话状态缓存上限与过期时间（秒）
+  # 可选：/v1/responses 后端模式（默认 auto）
+  # - auto: 优先使用 Vertex AI 原生 Interactions API（服务端持久化状态），遇 403 权限不足时自动降级到本地内存态
+  # - interactions: 强制使用 Vertex AI 原生 Interactions API（需服务账号具备 roles/aiplatform.user 权限）
+  # - local: 仅使用 :generateContent + 本地内存态 ResponseStore
+  # responses_backend: "auto"
+
+  # 可选：/v1/responses 内存会话状态缓存上限与过期时间（秒，仅 local/降级模式生效）
   # response_store_max_items: 500
   # response_store_ttl_seconds: 3600
 

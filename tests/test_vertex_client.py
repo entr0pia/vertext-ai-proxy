@@ -49,6 +49,33 @@ def test_get_publisher_models_url_respects_location():
     )
 
 
+def test_get_interactions_urls_global_and_regional():
+    global_client = _make_client(location="global", project_id="demo-proj")
+    assert global_client.get_interactions_url() == (
+        "https://aiplatform.googleapis.com/v1beta1/projects/demo-proj/locations/global/interactions"
+    )
+    assert global_client.get_interaction_url("int_123") == (
+        "https://aiplatform.googleapis.com/v1beta1/projects/demo-proj/locations/global/interactions/int_123"
+    )
+    assert global_client.get_interaction_cancel_url("int_123") == (
+        "https://aiplatform.googleapis.com/v1beta1/projects/demo-proj/locations/global/interactions/int_123/cancel"
+    )
+    assert global_client.get_interactions_url(location="us-central1") == (
+        "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/demo-proj/locations/us-central1/interactions"
+    )
+
+    regional_client = _make_client(location="us-central1", project_id="demo-proj")
+    assert regional_client.get_interactions_url() == (
+        "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/demo-proj/locations/us-central1/interactions"
+    )
+    assert regional_client.get_interaction_url("ChA_abc") == (
+        "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/demo-proj/locations/us-central1/interactions/ChA_abc"
+    )
+    assert regional_client.get_interaction_cancel_url("ChA_abc") == (
+        "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/demo-proj/locations/us-central1/interactions/ChA_abc/cancel"
+    )
+
+
 def test_extract_upstream_error_message_dict_list_and_plain():
     resp_dict = httpx.Response(
         400,

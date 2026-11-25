@@ -92,6 +92,28 @@ class VertexClient:
         domain = self.get_domain(location)
         return f"https://{domain}/v1beta1/publishers/google/models"
 
+    def get_interactions_url(self, location: str | None = None) -> str:
+        """构建 Vertex AI 原生 Interactions API 根端点 URL。"""
+        loc = location or self.location
+        domain = self.get_domain(loc)
+        return f"https://{domain}/v1beta1/projects/{self.project_id}/locations/{loc}/interactions"
+
+    def get_interaction_url(
+        self,
+        interaction_id: str,
+        location: str | None = None,
+    ) -> str:
+        """构建单条 Interaction 资源 URL（GET / DELETE）。"""
+        return f"{self.get_interactions_url(location)}/{interaction_id}"
+
+    def get_interaction_cancel_url(
+        self,
+        interaction_id: str,
+        location: str | None = None,
+    ) -> str:
+        """构建 Interaction 取消端点 URL（POST /cancel）。"""
+        return f"{self.get_interaction_url(interaction_id, location)}/cancel"
+
     @staticmethod
     def extract_upstream_error_message(resp: httpx.Response) -> str:
         """从上游 Vertex AI 响应中提取可读错误消息。"""

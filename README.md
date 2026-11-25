@@ -12,6 +12,29 @@
 
 ## 快速上手
 
+### 前置准备：GCP 服务账号与 IAM 权限
+
+使用本代理前，需在 Google Cloud 控制台中创建一个服务账号（Service Account）、下载 JSON 密钥文件（如 `service_account.json`），并为其授予对应的 IAM 角色：
+
+| IAM 角色（控制台显示名 / 角色 ID） | 支持能力 | 说明 |
+| --- | --- | --- |
+| **Vertex AI User**（新版控制台显示为 **Agent Platform User**）<br>`roles/aiplatform.user` | **全功能支持（推荐）** | 支持 Chat、Models、Embeddings、Images、Audio，以及 `/v1/responses` 原生 **Vertex AI Interactions API**（服务端持久化会话状态与 `previous_response_id` 续接）。 |
+| **Agent Platform Express User (Beta)** | 基础生成与嵌入 | 缺少 `aiplatform.interactions.*` 权限；默认 `responses_backend: "auto"` 模式下，`/v1/responses` 遇到 403 会自动降级到本地内存态（也可手动配置 `responses_backend: "local"`）。 |
+
+**授权步骤（GCP 控制台）**：
+1. 打开 **Google Cloud Console → IAM 与管理（IAM & Admin）→ IAM**。
+2. 找到您的服务账号（如 `xxx@<project-id>.iam.gserviceaccount.com`），点击右侧 **编辑主账号（铅笔图标）**。
+3. 点击 **添加其他角色**，搜索并选择 **Vertex AI User**（或 **Agent Platform User**，对应 `roles/aiplatform.user`），保存即可（权限通常 1~2 分钟内生效）。
+
+也可通过 `gcloud` CLI 一键授权：
+```bash
+gcloud projects add-iam-policy-binding <YOUR_PROJECT_ID> \
+  --member="serviceAccount:<SA_EMAIL>" \
+  --role="roles/aiplatform.user"
+```
+
+---
+
 ### 方式 A：通过 PyPI 全局安装（推荐）
 
 本工具已正式发布至 PyPI，支持通过 `uv tool`、`uvx` 或 `pip` 全局安装与运行：
@@ -87,6 +110,10 @@ proxy:
 
   auto_prefix_model: true
 
+  # 可选：/v1/responses 后端模式（auto | interactions | local，默认 auto）
+  # auto 优先使用 Vertex AI 原生 Interactions API（需服务账号具备 roles/aiplatform.user），遇 403 自动降级到本地内存态
+  # responses_backend: "auto"
+
   # 可选：如果在国内需要配置代理访问 Google，取消注释并填入代理端口：
   # http_proxy: "http://127.0.0.1:7890"
 
@@ -118,7 +145,10 @@ INFO:     Uvicorn running on http://127.0.0.1:8766 (Press CTRL+C to quit)
 ## 核心特性
 
 - **协议原生兼容**：`/v1/chat/completions` 直接对接 Google 官方 `endpoints/openapi`，支持流式、函数调用、结构化输出与多模态输入。
-- **OpenAI Responses API (`/v1/responses`)**：支持非流式与 SSE 语义事件流、工具调用、推理参数与结构化输出；内置有界 LRU+TTL 轻量内存态存储，支持 `previous_response_id` 多轮续接、`store: false`、`GET`/`DELETE` 与 `POST .../cancel`（零数据库依赖，重启清空）。
+- **OpenAI Responses API (`/v1/responses`)**：支持非流式与 SSE 语义事件流、工具调用、推理参数与结构化输出，支持 `previous_response_id` 多轮续接、`store: false`、`GET`/`DELETE` 与 `POST .../cancel`。通过 `proxy.responses_backend` 可配置后端模式：
+  - `auto`（默认）：优先路由至 Vertex AI 原生 **Gemini Interactions API**（服务端持久化会话状态与思考签名，多轮仅上传增量输入；需为服务账号授予 GCP IAM 角色 `roles/aiplatform.user` / *Agent Platform User*）；若上游返回 HTTP 403 权限不足，自动降级至 `:generateContent` + 本地有界 LRU+TTL 内存态（冷却 5 分钟）。
+  - `interactions`：强制走 Vertex AI 原生 Interactions API，遇 403 直接报错不降级。
+  - `local`：始终走 `:generateContent` + 本地内存态存储（零数据库依赖，适合仅具 `Agent Platform Express User` 权限的环境）。
 - **图像生成与编辑 (`/v1/images/generations` & `/v1/images/edits`)**：按显式 Google 模型名自动路由——`imagen-*` 路由至 Vertex AI `:predict`（支持 `mask` 局部重绘），`gemini-*` 图像模型路由至 `:generateContent`，不做格式拦截，以模型实际返回为准。
 - **语音合成与转写翻译 (`/v1/audio/speech`、`/v1/audio/transcriptions`、`/v1/audio/translations`)**：基于 Gemini 多模态与原生 TTS 能力，无外部 `ffmpeg` 依赖，不做 `response_format` 拦截（以模型返回为准，显式传 `wav`/`pcm` 时支持标准库 `wave` 无损封装/解包）。
 - **单模型查询与动态模型目录 (`/v1/models` & `/v1/models/{model}`)**：动态拉取 Vertex AI Publisher 模型列表并缓存 1 小时，支持按无前缀或 `google/` 前缀查询单个模型详情。

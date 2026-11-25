@@ -1,4 +1,5 @@
 from pathlib import Path
+from pydantic import ValidationError
 import pytest
 from vertext_ai_proxy.config import (
     AppConfig,
@@ -18,8 +19,38 @@ def test_default_config_values():
     assert config.gcp.service_account_file == "service_account.json"
     assert config.gcp.location == "global"
     assert config.proxy.auto_prefix_model is True
+    assert config.proxy.responses_backend == "auto"
     assert config.proxy.response_store_max_items == 500
     assert config.proxy.response_store_ttl_seconds == 3600
+
+
+@pytest.mark.parametrize("backend", ["auto", "interactions", "local"])
+def test_load_config_responses_backend_valid_overrides(tmp_path: Path, backend: str):
+    yaml_content = f"""
+proxy:
+  api_keys:
+    - "sk-custom-backend-test"
+  responses_backend: "{backend}"
+"""
+    config_file = tmp_path / f"backend_{backend}.yaml"
+    config_file.write_text(yaml_content, encoding="utf-8")
+
+    loaded = load_config(config_file)
+    assert loaded.proxy.responses_backend == backend
+
+
+def test_load_config_responses_backend_rejects_invalid_value(tmp_path: Path):
+    yaml_content = """
+proxy:
+  api_keys:
+    - "sk-custom-backend-test"
+  responses_backend: "invalid_mode"
+"""
+    config_file = tmp_path / "backend_invalid.yaml"
+    config_file.write_text(yaml_content, encoding="utf-8")
+
+    with pytest.raises(ValidationError):
+        load_config(config_file)
 
 
 def test_load_config_response_store_overrides(tmp_path: Path):

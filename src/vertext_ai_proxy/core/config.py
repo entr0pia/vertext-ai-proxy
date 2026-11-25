@@ -1,5 +1,6 @@
 import logging
 from pathlib import Path
+from typing import Literal
 import yaml
 from pydantic import BaseModel, Field
 
@@ -37,6 +38,8 @@ class ProxyConfig(BaseModel):
     http_proxy: str | None = None
     # 可在 yaml 配置文件中自由增减模型，供 /v1/models 接口返回给客户端
     models: list[str] = Field(default_factory=lambda: list(DEFAULT_MODELS))
+    # /v1/responses 后端模式：auto（优先 Vertex AI Interactions，403 自动降级本地）| interactions | local
+    responses_backend: Literal["auto", "interactions", "local"] = "auto"
     # /v1/responses 轻量内存态缓存上限与过期时间（秒）
     response_store_max_items: int = Field(default=500, ge=1)
     response_store_ttl_seconds: int = Field(default=3600, ge=1)

@@ -1,4 +1,5 @@
 import asyncio
+from collections import OrderedDict
 from collections.abc import AsyncGenerator
 import json
 import logging
@@ -16,29 +17,352 @@ from vertext_ai_proxy.schemas.responses import (
     ResponseCreateRequest,
     ResponseDeleteResult,
 )
+from vertext_ai_proxy.services.interactions_adapter import (
+    InteractionsSSETranslator,
+    build_openai_response_object,
+    empty_usage,
+    extract_function_calls_from_interaction,
+    translate_interaction_to_openai_response,
+    translate_request_to_interactions,
+)
 from vertext_ai_proxy.services.response_store import ActiveResponseHandle, ResponseStore
 from vertext_ai_proxy.services.vertex_client import VertexClient
 
 logger = logging.getLogger(__name__)
 
 _DATA_URI_RE = re.compile(r"^data:([^;]+);base64,(.+)$", re.DOTALL)
+_DEFAULT_CALL_NAME_CACHE_LIMIT = 2000
+_DEFAULT_INTERACTIONS_403_COOLDOWN_SECONDS = 300.0
 
 
 class ResponseService:
-    """将 OpenAI Responses API 协议翻译至 Vertex AI 原生 :generateContent / :streamGenerateContent。"""
+    """将 OpenAI Responses API 路由至 Vertex AI 原生 Interactions API 或本地 :generateContent 后端。"""
 
     def __init__(
         self,
         client: VertexClient,
         store: ResponseStore | None = None,
+        interactions_cooldown_seconds: float = _DEFAULT_INTERACTIONS_403_COOLDOWN_SECONDS,
     ) -> None:
         self.client = client
         self.store = store or ResponseStore(
             max_items=client.config.proxy.response_store_max_items,
             ttl_seconds=client.config.proxy.response_store_ttl_seconds,
         )
+        self._interactions_cooldown_seconds = interactions_cooldown_seconds
+        self._interactions_cooldown_until: float = 0.0
+        self._interaction_call_names: OrderedDict[str, str] = OrderedDict()
+        self._active_interactions: dict[str, ActiveResponseHandle] = {}
+
+    @property
+    def backend_mode(self) -> str:
+        return self.client.config.proxy.responses_backend
+
+    def _is_interactions_in_cooldown(self) -> bool:
+        return time.monotonic() < self._interactions_cooldown_until
+
+    def _enter_interactions_cooldown(self, reason: str) -> None:
+        self._interactions_cooldown_until = (
+            time.monotonic() + self._interactions_cooldown_seconds
+        )
+        logger.warning(
+            "Vertex AI Interactions API returned HTTP 403 (%s); "
+            "falling back to local :generateContent + ResponseStore backend "
+            "for %.0fs (auto mode). Grant roles/aiplatform.user to enable native Interactions.",
+            reason,
+            self._interactions_cooldown_seconds,
+        )
+
+    def _remember_function_calls(self, mapping: dict[str, str]) -> None:
+        for call_id, fn_name in mapping.items():
+            if not call_id or not fn_name:
+                continue
+            if call_id in self._interaction_call_names:
+                self._interaction_call_names.move_to_end(call_id)
+            self._interaction_call_names[call_id] = fn_name
+        while len(self._interaction_call_names) > _DEFAULT_CALL_NAME_CACHE_LIMIT:
+            self._interaction_call_names.popitem(last=False)
+
+    def _should_route_id_to_local(self, response_id: str) -> bool:
+        mode = self.backend_mode
+        if mode == "local":
+            return True
+        if mode == "interactions":
+            return False
+        # auto 模式：本地生成 ID 固定以 resp_ 开头，或已命中本地存储/活动表
+        if response_id.startswith("resp_"):
+            return True
+        return self.store.get_response_or_active(response_id) is not None
 
     async def create_response(self, request: ResponseCreateRequest) -> Response:
+        mode = self.backend_mode
+        if mode == "local":
+            return await self._create_local(request)
+
+        if mode == "auto":
+            prev_id = request.previous_response_id
+            if prev_id and (
+                prev_id.startswith("resp_") or self.store.get(prev_id) is not None
+            ):
+                return await self._create_local(request)
+            if self._is_interactions_in_cooldown():
+                return await self._create_local(request)
+            return await self._create_interactions(request, allow_403_fallback=True)
+
+        # mode == "interactions"
+        return await self._create_interactions(request, allow_403_fallback=False)
+
+    async def _resolve_missing_function_names(
+        self, request: ResponseCreateRequest
+    ) -> dict[str, str]:
+        known = dict(self._interaction_call_names)
+        if not isinstance(request.input, list):
+            return known
+
+        missing_call_ids: set[str] = set()
+        for item in request.input:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "function_call":
+                call_id = str(item.get("call_id") or item.get("id") or "")
+                fn_name = str(item.get("name") or "")
+                if call_id and fn_name:
+                    known[call_id] = fn_name
+            elif item.get("type") == "function_call_output":
+                call_id = str(item.get("call_id") or "")
+                if call_id and not item.get("name") and call_id not in known:
+                    missing_call_ids.add(call_id)
+
+        if (
+            missing_call_ids
+            and request.previous_response_id
+            and not request.previous_response_id.startswith("resp_")
+        ):
+            try:
+                url = self.client.get_interaction_url(request.previous_response_id)
+                headers = await self.client.get_auth_headers()
+                resp = await self.client.http_client.get(
+                    url,
+                    headers=headers,
+                    timeout=self.client.config.gcp.timeout_seconds,
+                )
+                if resp.status_code == 200:
+                    recovered = extract_function_calls_from_interaction(resp.json())
+                    self._remember_function_calls(recovered)
+                    known.update(recovered)
+            except Exception as exc:
+                logger.debug(
+                    "Best-effort function name recovery via GET /interactions/%s failed: %s",
+                    request.previous_response_id,
+                    exc,
+                )
+        return known
+
+    async def _create_interactions(
+        self,
+        request: ResponseCreateRequest,
+        allow_403_fallback: bool,
+    ) -> Response:
+        function_call_names = await self._resolve_missing_function_names(request)
+        payload = translate_request_to_interactions(
+            request=request,
+            function_call_names=function_call_names,
+            stream=request.stream,
+        )
+        self._remember_function_calls(function_call_names)
+
+        if request.stream:
+            return await self._handle_interactions_streaming(
+                request=request,
+                payload=payload,
+                allow_403_fallback=allow_403_fallback,
+            )
+        return await self._handle_interactions_non_streaming(
+            request=request,
+            payload=payload,
+            allow_403_fallback=allow_403_fallback,
+        )
+
+    async def _handle_interactions_non_streaming(
+        self,
+        request: ResponseCreateRequest,
+        payload: dict[str, Any],
+        allow_403_fallback: bool,
+    ) -> Response:
+        target_url = self.client.get_interactions_url()
+        headers = await self.client.get_auth_headers()
+
+        try:
+            resp = await self.client.http_client.post(
+                target_url,
+                headers=headers,
+                json=payload,
+                timeout=self.client.config.gcp.timeout_seconds,
+            )
+        except Exception as exc:
+            logger.error(f"Failed to connect to Vertex AI Interactions API: {exc}")
+            raise OpenAIAPIException(
+                status_code=502,
+                message=f"Failed to connect to Vertex AI: {str(exc)}",
+                code="upstream_connect_error",
+                err_type="api_error",
+            )
+
+        if resp.status_code == 403 and allow_403_fallback:
+            err_msg = self.client.extract_upstream_error_message(resp)
+            self._enter_interactions_cooldown(err_msg)
+            return await self._create_local(request)
+
+        if resp.status_code != 200:
+            err_msg = self.client.extract_upstream_error_message(resp)
+            logger.error(
+                f"Vertex AI Interactions API returned error {resp.status_code}: {err_msg}"
+            )
+            raise OpenAIAPIException(
+                status_code=resp.status_code,
+                message=f"Vertex AI Responses error: {err_msg}",
+                code="upstream_error",
+                err_type="api_error",
+            )
+
+        interaction_json = resp.json()
+        discovered_calls: dict[str, str] = {}
+        openai_resp = translate_interaction_to_openai_response(
+            interaction=interaction_json,
+            request=request,
+            function_call_names=discovered_calls,
+        )
+        self._remember_function_calls(discovered_calls)
+        return JSONResponse(status_code=200, content=openai_resp)
+
+    async def _handle_interactions_streaming(
+        self,
+        request: ResponseCreateRequest,
+        payload: dict[str, Any],
+        allow_403_fallback: bool,
+    ) -> Response:
+        target_url = self.client.get_interactions_url()
+        headers = await self.client.get_auth_headers(
+            extra={"Accept-Encoding": "identity", "Accept": "text/event-stream"}
+        )
+
+        req = self.client.http_client.build_request(
+            "POST",
+            target_url,
+            headers=headers,
+            json=payload,
+            timeout=self.client.config.gcp.timeout_seconds,
+        )
+        try:
+            upstream_response = await self.client.http_client.send(req, stream=True)
+        except Exception as exc:
+            logger.error(f"Failed to connect to Vertex AI Interactions streaming API: {exc}")
+            raise OpenAIAPIException(
+                status_code=502,
+                message=f"Failed to connect to Vertex AI: {str(exc)}",
+                code="upstream_connect_error",
+                err_type="api_error",
+            )
+
+        if upstream_response.status_code != 200:
+            await upstream_response.aread()
+            await upstream_response.aclose()
+            err_msg = self.client.extract_upstream_error_message(upstream_response)
+            if upstream_response.status_code == 403 and allow_403_fallback:
+                self._enter_interactions_cooldown(err_msg)
+                return await self._create_local(request)
+            raise OpenAIAPIException(
+                status_code=upstream_response.status_code,
+                message=f"Vertex AI Responses streaming error: {err_msg}",
+                code="upstream_error",
+                err_type="api_error",
+            )
+
+        discovered_calls: dict[str, str] = {}
+        translator = InteractionsSSETranslator(
+            request=request,
+            function_call_names=discovered_calls,
+        )
+        cancel_event = asyncio.Event()
+        registered_id: str | None = None
+
+        async def sse_generator() -> AsyncGenerator[str, None]:
+            nonlocal registered_id
+            try:
+                async for raw_line in upstream_response.aiter_lines():
+                    if cancel_event.is_set():
+                        break
+
+                    line = raw_line.strip()
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data_str = line[5:].strip()
+                    if not data_str or data_str == "[DONE]":
+                        continue
+
+                    try:
+                        event_json = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(event_json, dict):
+                        continue
+
+                    frames = translator.process_event(event_json)
+                    if registered_id is None and translator.created_emitted:
+                        registered_id = translator.response_id
+                        self._active_interactions[registered_id] = ActiveResponseHandle(
+                            response_id=registered_id,
+                            cancel_event=cancel_event,
+                            partial_response=build_openai_response_object(
+                                response_id=registered_id,
+                                created_at=translator.created_at,
+                                status="in_progress",
+                                model=request.model,
+                                output_items=[],
+                                output_text="",
+                                usage=empty_usage(),
+                                request=request,
+                            ),
+                            store_on_cancel=request.store,
+                        )
+                    for frame in frames:
+                        yield frame
+
+                self._remember_function_calls(discovered_calls)
+                for frame in translator.finalize_if_needed(cancelled=cancel_event.is_set()):
+                    yield frame
+            except Exception as exc:
+                logger.error(f"Error during Interactions SSE stream translation: {exc}")
+                failed_resp = build_openai_response_object(
+                    response_id=translator.response_id,
+                    created_at=translator.created_at,
+                    status="failed",
+                    model=request.model,
+                    output_items=translator.output_items,
+                    output_text=translator.accumulated_text,
+                    usage=translator.latest_usage,
+                    request=request,
+                    error={"code": "internal_error", "message": str(exc)},
+                )
+                yield translator._emit("response.failed", {"response": failed_resp})
+            finally:
+                self._remember_function_calls(discovered_calls)
+                if registered_id is not None:
+                    self._active_interactions.pop(registered_id, None)
+                await upstream_response.aclose()
+
+        return StreamingResponse(
+            sse_generator(),
+            status_code=200,
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    async def _create_local(self, request: ResponseCreateRequest) -> Response:
         # 1. 恢复 previous_response_id 上下文（如提供）
         prior_contents: list[dict[str, Any]] = []
         function_call_names: dict[str, str] = {}
@@ -95,8 +419,36 @@ class ResponseService:
         )
 
     async def get_response(self, response_id: str) -> JSONResponse:
-        result = self.store.get_response_or_active(response_id)
-        if result is None:
+        if self._should_route_id_to_local(response_id):
+            result = self.store.get_response_or_active(response_id)
+            if result is None:
+                raise OpenAIAPIException(
+                    status_code=404,
+                    message=f"Response '{response_id}' not found.",
+                    code="not_found",
+                    param="response_id",
+                    err_type="invalid_request_error",
+                )
+            return JSONResponse(status_code=200, content=result)
+
+        url = self.client.get_interaction_url(response_id)
+        headers = await self.client.get_auth_headers()
+        try:
+            resp = await self.client.http_client.get(
+                url,
+                headers=headers,
+                timeout=self.client.config.gcp.timeout_seconds,
+            )
+        except Exception as exc:
+            logger.error(f"Failed to retrieve Vertex AI interaction '{response_id}': {exc}")
+            raise OpenAIAPIException(
+                status_code=502,
+                message=f"Failed to connect to Vertex AI: {str(exc)}",
+                code="upstream_connect_error",
+                err_type="api_error",
+            )
+
+        if resp.status_code == 404:
             raise OpenAIAPIException(
                 status_code=404,
                 message=f"Response '{response_id}' not found.",
@@ -104,11 +456,61 @@ class ResponseService:
                 param="response_id",
                 err_type="invalid_request_error",
             )
-        return JSONResponse(status_code=200, content=result)
+        if resp.status_code != 200:
+            err_msg = self.client.extract_upstream_error_message(resp)
+            raise OpenAIAPIException(
+                status_code=resp.status_code,
+                message=f"Vertex AI Responses error: {err_msg}",
+                code="upstream_error",
+                err_type="api_error",
+            )
+
+        discovered_calls: dict[str, str] = {}
+        translated = translate_interaction_to_openai_response(
+            interaction=resp.json(),
+            function_call_names=discovered_calls,
+        )
+        self._remember_function_calls(discovered_calls)
+        return JSONResponse(status_code=200, content=translated)
 
     async def delete_response(self, response_id: str) -> JSONResponse:
-        deleted = self.store.delete(response_id)
-        if not deleted:
+        if self._should_route_id_to_local(response_id):
+            deleted = self.store.delete(response_id)
+            if not deleted:
+                raise OpenAIAPIException(
+                    status_code=404,
+                    message=f"Response '{response_id}' not found.",
+                    code="not_found",
+                    param="response_id",
+                    err_type="invalid_request_error",
+                )
+            payload = ResponseDeleteResult(id=response_id)
+            return JSONResponse(status_code=200, content=payload.model_dump())
+
+        active = self._active_interactions.pop(response_id, None)
+        if active is not None:
+            active.cancel_event.set()
+            if active.task and not active.task.done():
+                active.task.cancel()
+
+        url = self.client.get_interaction_url(response_id)
+        headers = await self.client.get_auth_headers()
+        try:
+            resp = await self.client.http_client.delete(
+                url,
+                headers=headers,
+                timeout=self.client.config.gcp.timeout_seconds,
+            )
+        except Exception as exc:
+            logger.error(f"Failed to delete Vertex AI interaction '{response_id}': {exc}")
+            raise OpenAIAPIException(
+                status_code=502,
+                message=f"Failed to connect to Vertex AI: {str(exc)}",
+                code="upstream_connect_error",
+                err_type="api_error",
+            )
+
+        if resp.status_code == 404:
             raise OpenAIAPIException(
                 status_code=404,
                 message=f"Response '{response_id}' not found.",
@@ -116,12 +518,55 @@ class ResponseService:
                 param="response_id",
                 err_type="invalid_request_error",
             )
+        if resp.status_code not in (200, 204):
+            err_msg = self.client.extract_upstream_error_message(resp)
+            raise OpenAIAPIException(
+                status_code=resp.status_code,
+                message=f"Vertex AI Responses error: {err_msg}",
+                code="upstream_error",
+                err_type="api_error",
+            )
+
         payload = ResponseDeleteResult(id=response_id)
         return JSONResponse(status_code=200, content=payload.model_dump())
 
     async def cancel_response(self, response_id: str) -> JSONResponse:
-        cancelled = self.store.cancel(response_id)
-        if cancelled is None:
+        if self._should_route_id_to_local(response_id):
+            cancelled = self.store.cancel(response_id)
+            if cancelled is None:
+                raise OpenAIAPIException(
+                    status_code=404,
+                    message=f"Response '{response_id}' not found.",
+                    code="not_found",
+                    param="response_id",
+                    err_type="invalid_request_error",
+                )
+            return JSONResponse(status_code=200, content=cancelled)
+
+        active = self._active_interactions.get(response_id)
+        if active is not None:
+            active.cancel_event.set()
+            if active.task and not active.task.done():
+                active.task.cancel()
+
+        url = self.client.get_interaction_cancel_url(response_id)
+        headers = await self.client.get_auth_headers()
+        try:
+            resp = await self.client.http_client.post(
+                url,
+                headers=headers,
+                timeout=self.client.config.gcp.timeout_seconds,
+            )
+        except Exception as exc:
+            logger.error(f"Failed to cancel Vertex AI interaction '{response_id}': {exc}")
+            raise OpenAIAPIException(
+                status_code=502,
+                message=f"Failed to connect to Vertex AI: {str(exc)}",
+                code="upstream_connect_error",
+                err_type="api_error",
+            )
+
+        if resp.status_code == 404:
             raise OpenAIAPIException(
                 status_code=404,
                 message=f"Response '{response_id}' not found.",
@@ -129,7 +574,17 @@ class ResponseService:
                 param="response_id",
                 err_type="invalid_request_error",
             )
-        return JSONResponse(status_code=200, content=cancelled)
+        if resp.status_code != 200:
+            err_msg = self.client.extract_upstream_error_message(resp)
+            raise OpenAIAPIException(
+                status_code=resp.status_code,
+                message=f"Vertex AI Responses error: {err_msg}",
+                code="upstream_error",
+                err_type="api_error",
+            )
+
+        translated = translate_interaction_to_openai_response(interaction=resp.json())
+        return JSONResponse(status_code=200, content=translated)
 
     async def _handle_non_streaming(
         self,

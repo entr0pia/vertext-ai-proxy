@@ -13,6 +13,7 @@ class ResponseCreateRequest(BaseModel):
     previous_response_id: str | None = None
     store: bool = True
     stream: bool = False
+    background: bool | None = None
     tools: list[dict[str, Any]] | None = None
     tool_choice: str | dict[str, Any] | None = None
     temperature: float | None = None

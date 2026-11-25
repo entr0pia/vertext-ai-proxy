@@ -13,7 +13,7 @@
 - **Auth Translation**: Intercepts downstream OpenAI client requests authenticated with static API keys (`Authorization: Bearer <key>`) and proxies them to Vertex AI using short-lived Google Cloud OAuth 2.0 Bearer tokens derived from a Google Service Account JSON.
 - **Dynamic Model Garden & Single-Model Retrieval**: Automatically queries Google Cloud Vertex AI's `v1beta1/publishers/google/models` endpoint to serve `GET /v1/models` and `GET /v1/models/{model:path}` dynamically, with in-memory 1-hour caching and graceful configuration fallback.
 - **SSE Streaming Pass-Through**: Provides real-time, non-buffered Server-Sent Events (SSE) streaming for `/v1/chat/completions` using `httpx.AsyncClient` (`Accept-Encoding: identity` + `aiter_bytes()`).
-- **Responses API with Bounded In-Memory State**: Translates `POST /v1/responses` (non-streaming and SSE semantic events, tools, reasoning, structured output) to Vertex AI `:generateContent` / `:streamGenerateContent?alt=sse`, backed by an LRU+TTL in-memory store supporting `previous_response_id`, `GET`/`DELETE /v1/responses/{response_id}`, and `POST /v1/responses/{response_id}/cancel`.
+- **Responses API (Vertex AI Interactions + Local Fallback)**: Translates `POST /v1/responses`, `GET`/`DELETE /v1/responses/{response_id}`, and `POST /v1/responses/{response_id}/cancel` (non-streaming and SSE semantic events, tools, reasoning, structured output) via configurable `proxy.responses_backend` (`auto` default | `interactions` | `local`). In `auto` / `interactions` mode, routes to Vertex AI's native Gemini Interactions API (`/v1beta1/projects/{project}/locations/{location}/interactions`, requiring GCP IAM role `roles/aiplatform.user` / *Agent Platform User*) for server-side `previous_interaction_id` chaining and state persistence; in `auto` mode, HTTP 403 transparently falls back with a soft cooldown to `:generateContent` / `:streamGenerateContent?alt=sse` + bounded LRU+TTL `ResponseStore`.
 - **Images Generation & Editing**: Translates `POST /v1/images/generations` and `POST /v1/images/edits` (multipart) to Vertex AI Imagen (`:predict`) or Gemini image models (`:generateContent`), without format blocking or OpenAI model alias rewriting.
 - **Audio Speech & Transcription/Translation**: Translates `POST /v1/audio/speech` (TTS, upstream-driven audio passthrough with stdlib `wave` WAV/PCM conversion, no `ffmpeg`), `POST /v1/audio/transcriptions`, and `POST /v1/audio/translations` to Vertex AI Gemini `:generateContent`.
 - **Embeddings Proxy & Adaptation**: Translates standard OpenAI `POST /v1/embeddings` requests to Google Vertex AI native `:predict` or `:embedContent` endpoint, supporting `text-embedding-004`, `gemini-embedding-001`, `gemini-embedding-2`, and batching.
@@ -76,9 +76,10 @@ Vertext-AI-Proxy/
 │       │   ├── chat_service.py  # Chat completions forwarding & SSE streaming
 │       │   ├── embedding_service.py # Embeddings protocol translation (OpenAI -> :predict/:embedContent)
 │       │   ├── image_service.py # Imagen (:predict) & Gemini (:generateContent) image routing
+│       │   ├── interactions_adapter.py # OpenAI Responses <-> Vertex AI Interactions request/response/SSE translation
 │       │   ├── model_service.py # Publisher models discovery, single lookup & 1-hour caching
 │       │   ├── response_store.py # Bounded LRU+TTL in-memory Responses store & cancel handles
-│       │   └── response_service.py # Responses API translation & SSE semantic streaming
+│       │   └── response_service.py # Responses API routing (auto/interactions/local) & lifecycle orchestration
 │       └── routers/             # FastAPI APIRouter modules
 │           ├── __init__.py
 │           ├── health.py        # GET /healthz
