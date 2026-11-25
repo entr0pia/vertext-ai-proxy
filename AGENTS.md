@@ -98,6 +98,7 @@ Vertext-AI-Proxy/
     ├── test_embeddings.py       # Integration tests for embeddings proxying & validation
     ├── test_images.py           # Integration tests for Imagen & Gemini image routes
     ├── test_models.py           # Unit & route tests for model normalization and lookup
+    ├── test_openai_sdk_compat.py # Strict compatibility tests using official openai.AsyncOpenAI SDK over ASGI
     ├── test_proxy.py            # Integration tests for proxy routing and streaming
     ├── test_responses.py        # Unit & integration tests for Responses API & memory store
     ├── test_schemas.py          # Unit tests for schema validation
@@ -178,12 +179,12 @@ $env:PYTHONUTF8=1; uv run pytest tests/test_proxy.py
 ```
 
 ### Testing Guidelines for Agents
-- When writing tests for FastAPI endpoints, use `TestClient(app)` for synchronous route assertions, or `httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test")` for async/streaming assertions.
+- When writing tests for FastAPI endpoints, use `TestClient(app)` for synchronous route assertions, `httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test")` for raw HTTP/SSE assertions, and the official `openai.AsyncOpenAI` SDK over `httpx2.ASGITransport(app=app)` (`tests/test_openai_sdk_compat.py`) to enforce strict OpenAI Pydantic schema compatibility.
 - Mock upstream Google Cloud HTTP calls using `unittest.mock.AsyncMock` on `httpx.AsyncClient`. Do NOT make unmocked external requests inside `tests/`.
 
 ### End-to-End (E2E) Live Testing
-- For real upstream integration testing, launch the proxy server with local credentials (`vap run` or `$env:PYTHONUTF8=1; uv run python -m vertext_ai_proxy.app`) and execute live HTTP requests against `http://127.0.0.1:8766` using a scratch script (`<conversation-id>/scratch/test_e2e.py`).
-- Verify health (`/healthz`), chat completions (`/v1/chat/completions`), and embeddings (`/v1/embeddings`) against actual Vertex AI upstream endpoints.
+- For real upstream integration testing, launch the proxy server with local credentials (`vap run` or `$env:PYTHONUTF8=1; uv run python -m vertext_ai_proxy.app`) and execute live requests against `http://127.0.0.1:8766/v1` using the official `openai.OpenAI` SDK (with `http_client=openai.DefaultHttpxClient(trust_env=False, timeout=60.0)` on Windows to avoid local proxy latency) inside a scratch script (`<conversation-id>/scratch/test_e2e_openai_sdk.py`).
+- Verify health (`/healthz`), models (`/v1/models`), chat completions (`/v1/chat/completions`), embeddings (`/v1/embeddings`), and Responses API (`/v1/responses`) against actual Vertex AI upstream endpoints.
 
 ---
 
